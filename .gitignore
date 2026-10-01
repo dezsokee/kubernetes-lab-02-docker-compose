@@ -2,3 +2,5 @@
 .omo/
 *.jar
 *.py[c|o]
+.venv/
+.env

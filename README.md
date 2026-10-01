@@ -16,3 +16,49 @@ Try to deploy the application in the live environment!
 If possible, set up Caddy as your web server.
 
 Fork this repository and continue your work here.
+
+---
+
+## Solution: snipbox + PostgreSQL
+
+The Lab 1 service lives in [`service/`](service/README.md). It moved from an
+SQLite file to a PostgreSQL container, and [`docker-compose.yaml`](docker-compose.yaml)
+starts both.
+
+```
+            host :8400
+                |
+   [backend] ---+--- snipbox ---+--- [database, internal]
+                                |
+                            snipbox-db (postgres:18-alpine, volume snipbox-db-data)
+```
+
+- **`backend` network**: the app's public side. The published port goes through it, and later a reverse proxy (Caddy) can join it.
+- **`database` network**: `internal: true`, so it has no route to the internet. Only `snipbox` and `snipbox-db` are on it.
+- `snipbox` is on both networks, `snipbox-db` only on `database`, with no published port.
+- The app reaches the database by its **container name**: `postgresql://...@snipbox-db:5432/snipbox`.
+- `snipbox` waits for `snipbox-db` to pass its `pg_isready` healthcheck (`depends_on: condition: service_healthy`).
+
+### Run
+
+```bash
+cp .env.example .env              # optional, set a real password
+docker compose up --build -d
+curl -s localhost:8400/health     # {"status":"ok","snippets":0,"db":"snipbox-db:5432/snipbox"}
+
+curl -s -X POST localhost:8400/snippets \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"hello","content":"print(1)"}'
+
+docker compose down               # containers and networks gone, volume kept
+docker compose up -d              # the snippet is still there
+docker compose down -v            # also drops the database volume
+```
+
+### Check the network isolation
+
+```bash
+docker inspect -f '{{.Name}}: {{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' snipbox snipbox-db
+docker exec snipbox python -c "import socket; print(socket.gethostbyname('snipbox-db'))"
+docker port snipbox-db            # prints nothing: the database is not published
+```

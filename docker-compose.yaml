@@ -1,0 +1,65 @@
+services:
+  snipbox:
+    build:
+      context: ./service
+    image: snipbox:2.0.0
+    container_name: snipbox
+    ports:
+      - "8400:8080"
+    environment:
+      # The host is the database's *container name*, resolved by Docker's DNS
+      # on the shared "database" network.
+      SNIPBOX_DATABASE_URL: postgresql://${POSTGRES_USER:-snipbox}:${POSTGRES_PASSWORD:-snipbox}@snipbox-db:5432/${POSTGRES_DB:-snipbox}
+    networks:
+      - backend
+      - database
+    depends_on:
+      snipbox-db:
+        condition: service_healthy
+    # The app keeps no local state any more, everything lives in PostgreSQL.
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).status == 200 else 1)"
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+  snipbox-db:
+    image: postgres:18-alpine
+    container_name: snipbox-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-snipbox}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-snipbox}
+      POSTGRES_DB: ${POSTGRES_DB:-snipbox}
+    volumes:
+      # postgres:18 keeps its data in a versioned subdirectory of this path.
+      - snipbox-db-data:/var/lib/postgresql
+    # Only on the database network: no published port, so neither the host
+    # nor anything on the backend network can reach it, only snipbox.
+    networks:
+      - database
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 10
+
+networks:
+  # Front side of the app: the published port and, later, a reverse proxy.
+  backend:
+  # App <-> database only. "internal" also cuts this network off the internet.
+  database:
+    internal: true
+
+volumes:
+  snipbox-db-data:
